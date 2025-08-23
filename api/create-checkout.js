@@ -1,16 +1,16 @@
 // api/create-checkout.js
 import Stripe from 'stripe';
 
-// --- CORS helper (autorise les requêtes depuis ta page GHL) ---
+// CORS
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
 
-// Whitelist sécurité : TES Price IDs LIVE (exactement ceux que tu m’as donnés)
+// Whitelist sécurité : TES Price IDs LIVE
 const ALLOWED = new Set([
   'price_1RyfvYBuJldFrY1HUhhozNq1', // Intro massage sportif (300)
   'price_1RyfwWBuJldFrY1HvfnzyJjB', // Massage 4 mains (550)
@@ -22,7 +22,7 @@ const ALLOWED = new Set([
   'price_1Ryfy4BuJldFrY1HhpWVvLLh'  // Viscéral (550)
 ]);
 
-const TOTAL_MASTERCLASSES = 8; // −30% si tout (8)
+const TOTAL_MASTERCLASSES = 8;
 
 export default async function handler(req, res) {
   setCors(res);
@@ -30,7 +30,12 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { priceIds, customerEmail } = req.body || {};
+    const body = req.body || {};
+    const priceIds = Array.isArray(body.priceIds) ? body.priceIds
+                   : Array.isArray(body.prices)   ? body.prices
+                   : null;
+    const customerEmail = body.customerEmail || body.email || undefined;
+
     if (!Array.isArray(priceIds) || priceIds.length < 1) {
       return res.status(400).json({ error: 'Sélection invalide' });
     }
@@ -38,36 +43,52 @@ export default async function handler(req, res) {
     // Sécurité + dédup
     const clean = [...new Set(priceIds)].filter(id => ALLOWED.has(id));
     if (clean.length !== priceIds.length) {
-      return res.status(400).json({ error: 'Price ID non autorisé' });
+      return res.status(400).json({ error: 'Price ID non autorisé', detail: `Envoyés: ${priceIds.join(',')}` });
     }
 
-    // Détermine la remise automatique
-    // Ajoute dans Vercel les env COUPON_3_ID (−15%) et COUPON_ALL_ID (−30%)
+    // Remises auto
     let discounts = [];
     if (clean.length === 3 && process.env.COUPON_3_ID) {
-      discounts = [{ coupon: process.env.COUPON_3_ID }];
+      discounts = [{ coupon: process.env.COUPON_3_ID }];      // −15%
     } else if (clean.length === TOTAL_MASTERCLASSES && process.env.COUPON_ALL_ID) {
-      discounts = [{ coupon: process.env.COUPON_ALL_ID }];
+      discounts = [{ coupon: process.env.COUPON_ALL_ID }];    // −30%
     }
 
-    const session = await stripe.checkout.sessions.create({
+    // Paramètres de base
+    const sessionParams = {
       mode: 'payment',
       line_items: clean.map(p => ({ price: p, quantity: 1 })),
-      discounts: discounts.length ? discounts : undefined,
       automatic_tax: { enabled: true },
-      allow_promotion_codes: false,
-      customer_email: customerEmail || undefined, // facultatif
+      customer_email: customerEmail,
       success_url: 'https://www.ecole-de-massotherapie.com/merci-pack?session_id={CHECKOUT_SESSION_ID}',
       cancel_url: 'https://www.ecole-de-massotherapie.com/masterclass',
       metadata: {
         selected_prices: clean.join(','),
-        pack_logic: clean.length === 3 ? 'PACK3_15' : (clean.length === TOTAL_MASTERCLASSES ? 'ALL_30' : 'NONE')
+        pack_logic:
+          clean.length === 3 ? 'PACK3_15' :
+          (clean.length === TOTAL_MASTERCLASSES ? 'ALL_30' : 'NONE'),
       }
-    });
+    };
 
+    // ⚠️ IMPORTANT : ne jamais envoyer allow_promotion_codes EN MÊME TEMPS que discounts
+    if (discounts.length > 0) {
+      sessionParams.discounts = discounts;               // on applique nos coupons automatiques
+      // sessionParams.allow_promotion_codes = false;    // inutile de l'envoyer (évite l'erreur Stripe)
+    } else {
+      // Si tu veux autoriser un code promo manuel uniquement quand il n’y a PAS de remise auto :
+      // sessionParams.allow_promotion_codes = true;
+      // Sinon ne mets rien.
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
     return res.status(200).json({ url: session.url });
+
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'server_error', message: e.message });
+    console.error('Stripe error:', e);
+    return res.status(500).json({
+      error: 'server_error',
+      message: e.message,
+      detail: e?.raw?.message || e?.raw?.code || null,
+    });
   }
 }
