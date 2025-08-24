@@ -1,7 +1,7 @@
 // api/create-checkout.js
 import Stripe from 'stripe';
 
-// CORS
+// --- CORS helper ---
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
@@ -10,7 +10,7 @@ function setCors(res) {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
 
-// Whitelist sécurité : TES Price IDs LIVE
+// --- Whitelist sécurité : TES Price IDs LIVE ---
 const ALLOWED = new Set([
   'price_1RyfvYBuJldFrY1HUhhozNq1', // Intro massage sportif (300)
   'price_1RyfwWBuJldFrY1HvfnzyJjB', // Massage 4 mains (550)
@@ -40,21 +40,24 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Sélection invalide' });
     }
 
-    // Sécurité + dédup
+    // --- Sécurité + déduplication ---
     const clean = [...new Set(priceIds)].filter(id => ALLOWED.has(id));
     if (clean.length !== priceIds.length) {
-      return res.status(400).json({ error: 'Price ID non autorisé', detail: `Envoyés: ${priceIds.join(',')}` });
+      return res.status(400).json({
+        error: 'Price ID non autorisé',
+        detail: `Envoyés: ${priceIds.join(',')}`
+      });
     }
 
-    // Remises auto
+    // --- Remises automatiques ---
     let discounts = [];
     if (clean.length === 3 && process.env.COUPON_3_ID) {
-      discounts = [{ coupon: process.env.COUPON_3_ID }];      // −15%
+      discounts = [{ coupon: process.env.COUPON_3_ID }]; // −15%
     } else if (clean.length === TOTAL_MASTERCLASSES && process.env.COUPON_ALL_ID) {
-      discounts = [{ coupon: process.env.COUPON_ALL_ID }];    // −30%
+      discounts = [{ coupon: process.env.COUPON_ALL_ID }]; // −30%
     }
 
-    // Paramètres de base
+    // --- Paramètres de la session ---
     const sessionParams = {
       mode: 'payment',
       line_items: clean.map(p => ({ price: p, quantity: 1 })),
@@ -64,20 +67,15 @@ export default async function handler(req, res) {
       cancel_url: 'https://www.ecole-de-massotherapie.com/masterclass',
       metadata: {
         selected_prices: clean.join(','),
-        pack_logic:
-          clean.length === 3 ? 'PACK3_15' :
-          (clean.length === TOTAL_MASTERCLASSES ? 'ALL_30' : 'NONE'),
+        pack_logic: clean.length === 3
+          ? 'PACK3_15'
+          : (clean.length === TOTAL_MASTERCLASSES ? 'ALL_30' : 'NONE')
       }
     };
 
-    // ⚠️ IMPORTANT : ne jamais envoyer allow_promotion_codes EN MÊME TEMPS que discounts
+    // --- Ajout des remises (sans allow_promotion_codes en doublon) ---
     if (discounts.length > 0) {
-      sessionParams.discounts = discounts;               // on applique nos coupons automatiques
-      // sessionParams.allow_promotion_codes = false;    // inutile de l'envoyer (évite l'erreur Stripe)
-    } else {
-      // Si tu veux autoriser un code promo manuel uniquement quand il n’y a PAS de remise auto :
-      // sessionParams.allow_promotion_codes = true;
-      // Sinon ne mets rien.
+      sessionParams.discounts = discounts;
     }
 
     const session = await stripe.checkout.sessions.create(sessionParams);
