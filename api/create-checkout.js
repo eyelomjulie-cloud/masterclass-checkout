@@ -18,7 +18,7 @@ const ALLOWED = new Set([
   'price_1Ryfx8BuJldFrY1H08EEYsQj', // Points gâchettes (550)
   'price_1RyfxNBuJldFrY1HATKXKVTb', // Taping niveau 1 (795)
   'price_1RyfxZBuJldFrY1H3QPLPA86', // Massage crânio-sacré (550)
-  'price_1RyfxpBuJldFrY1HUOo162Df', // Massage sur chaise avancé (300)
+  'price_1S0N4EBuJldFrY1HKI4Fd2Eq', // Massage dermo corporel (695)
   'price_1Ryfy4BuJldFrY1HhpWVvLLh', // Massage viscéral (550)
 ]);
 
